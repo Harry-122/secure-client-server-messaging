@@ -3,13 +3,29 @@ package com.project.cyber;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
+import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.security.InvalidKeyException;
+import java.security.KeyFactory;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
 
 public class Server {
 
 	public static void main(String[] args) throws IOException {
+		
+		System.out.println(System.getProperty("java.runtime.version"));
 
 		if (args.length != 1) {
 			System.out.println("The length of the provided argument is incorrect!!!");
@@ -28,13 +44,22 @@ public class Server {
 						DataOutputStream dos = new DataOutputStream(s.getOutputStream());
 						DataInputStream dis = new DataInputStream(s.getInputStream())) {
 
-					String message;
+					String base64Message = null;
 					try {
-						while ((message = dis.readUTF()) != null) {
-							System.out.println(message);
-							dos.writeUTF(message.toUpperCase());
+						while ((base64Message = dis.readUTF()) != null) {							
+							File f = new File("server.prv");
+							byte[] keyBytes = Files.readAllBytes(f.toPath());
+							PKCS8EncodedKeySpec prvSpec = new PKCS8EncodedKeySpec(keyBytes);
+							KeyFactory kf = KeyFactory.getInstance("RSA");
+							PrivateKey prvKey = kf.generatePrivate(prvSpec);
+
+							Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+							cipher.init(Cipher.DECRYPT_MODE, prvKey);
+							byte[] stringBytes = cipher.doFinal(Base64.getDecoder().decode(base64Message));
+							String result = new String(stringBytes, "UTF8");
+							System.out.println(result);
 						}
-					} catch (EOFException e) {
+					} catch (EOFException | NoSuchAlgorithmException | InvalidKeySpecException | NoSuchPaddingException | InvalidKeyException | IllegalBlockSizeException | BadPaddingException e) {
 						System.out.println("End of the file reached.");
 					}
 
