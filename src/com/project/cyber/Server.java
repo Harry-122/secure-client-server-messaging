@@ -8,6 +8,7 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
@@ -15,12 +16,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.Signature;
+import java.security.SignatureException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Date;
 import java.util.HashMap;
 
 import javax.crypto.BadPaddingException;
@@ -76,29 +78,44 @@ public class Server {
 
 	private static void receiveClientEncryptedMessage(DataInputStream dis) {
 		String base64Message = null;
+		String user = null;
+		Long epoch = null;
+		String signature = null;
 		try {
-			if ((base64Message = dis.readUTF()) != null) {
-				String result = decryptionUtil(SERVER, base64Message);
-				String userId;
-				if (result.startsWith("a")) {
-					result = result.substring(5);
-					userId = "alice";
-				} else {
-					result = result.substring(3);
-					userId = "bob";
-				}
+			if ((base64Message = dis.readUTF()) != null && (epoch = dis.readLong()) != null
+					&& (user = dis.readUTF()) != null && (signature = dis.readUTF()) != null) {
 
-				String hashedId = convertUserIdToHashedMD5Id(userId);
-				MessageContent c = new MessageContent(encryptionUtil(userId, result.getBytes()), new Date());
+				boolean signed = verifySignature(Base64.getDecoder().decode(signature), base64Message, epoch, user);
+				if (signed) {
+					System.out.println(
+							"Signature verification was successful, decrypting the message from the client...");
 
-				ArrayList<MessageContent> content;
-				if (userMessages.containsKey(hashedId)) {
-					content = userMessages.get(hashedId);
+					String result = decryptionUtil(SERVER, Base64.getDecoder().decode(base64Message));
+					String recipient;
+					if (result.startsWith("a")) {
+						result = result.substring(5);
+						recipient = "alice";
+					} else {
+						result = result.substring(3);
+						recipient = "bob";
+					}
+
+					String hashedId = convertUserIdToHashedMD5Id(recipient);
+					MessageContent c = new MessageContent(
+							Base64.getEncoder().encodeToString(encryptionUtil(recipient, result.getBytes())), epoch);
+
+					ArrayList<MessageContent> content;
+					if (userMessages.containsKey(hashedId)) {
+						content = userMessages.get(hashedId);
+					} else {
+						content = new ArrayList<>();
+					}
+					content.add(c);
+					userMessages.put(hashedId, content);
 				} else {
-					content = new ArrayList<>();
+					System.err.println(
+							"Signature verification was not successful, discarding the message from the client...");
 				}
-				content.add(c);
-				userMessages.put(hashedId, content);
 			}
 		} catch (EOFException e) {
 			System.out.println("End of the file reached...");
@@ -116,6 +133,7 @@ public class Server {
 				oos.writeInt(messages.size());
 				for (MessageContent content : messages) {
 					oos.writeObject(content);
+					oos.write(getSignature(content.getEncryptedMessage(), content.unencryptedTimestamp));
 				}
 				userMessages.remove(hexedId);
 			} else {
@@ -126,6 +144,32 @@ public class Server {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+	}
+
+	private static byte[] getSignature(String encryptedString, Long timestamp) {
+		try {
+			Signature sig = Signature.getInstance("SHA256withRSA");
+			sig.initSign(getPrivateKey(SERVER));
+			sig.update(encryptedString.getBytes());
+			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(timestamp).array());
+			return sig.sign();
+		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	private static boolean verifySignature(byte[] signature, String base64Message, Long epoch, String user) {
+		try {
+			Signature sig = Signature.getInstance("SHA256withRSA");
+			sig.initVerify(getPublicKey(user));
+			sig.update(base64Message.getBytes());
+			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(epoch).array());
+			return sig.verify(signature);
+		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
+			e.printStackTrace();
+		}
+		return false;
 	}
 
 	private static String receiveClientHexedMD5UserId(DataInputStream dis) {
@@ -157,7 +201,7 @@ public class Server {
 		return null;
 	}
 
-	private static String encryptionUtil(String userId, byte[] byteMessage) {
+	private static byte[] encryptionUtil(String userId, byte[] byteMessage) {
 		try {
 			PublicKey pubKey = getPublicKey(userId);
 
@@ -165,7 +209,7 @@ public class Server {
 			cipher.init(Cipher.ENCRYPT_MODE, pubKey);
 			byte[] raw = cipher.doFinal(byteMessage);
 
-			return Base64.getEncoder().encodeToString(raw);
+			return raw;
 		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
 				| BadPaddingException e) {
 			e.printStackTrace();
@@ -173,13 +217,13 @@ public class Server {
 		return null;
 	}
 
-	private static String decryptionUtil(String userId, String message) {
+	private static String decryptionUtil(String userId, byte[] message) {
 		try {
 			PrivateKey prvKey = getPrivateKey(userId);
 
 			Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
 			cipher.init(Cipher.DECRYPT_MODE, prvKey);
-			byte[] stringBytes = cipher.doFinal(Base64.getDecoder().decode(message));
+			byte[] stringBytes = cipher.doFinal(message);
 
 			return new String(stringBytes, "UTF8");
 		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
@@ -228,12 +272,12 @@ public class Server {
 	public static class MessageContent implements Serializable {
 		private static final long serialVersionUID = 9131511945077216480L;
 		private String encryptedMessage;
-		private Date unencryptedTimestamp;
+		private Long unencryptedTimestamp;
 
 		public MessageContent() {
 		}
 
-		public MessageContent(String message, Date timestamp) {
+		public MessageContent(String message, Long timestamp) {
 			this.encryptedMessage = message;
 			this.unencryptedTimestamp = timestamp;
 		}
@@ -246,11 +290,11 @@ public class Server {
 			this.encryptedMessage = encryptedMessage;
 		}
 
-		public Date getUnencryptedTimestamp() {
+		public Long getUnencryptedTimestamp() {
 			return unencryptedTimestamp;
 		}
 
-		public void setUnencryptedTimestamp(Date unencryptedTimestamp) {
+		public void setUnencryptedTimestamp(Long unencryptedTimestamp) {
 			this.unencryptedTimestamp = unencryptedTimestamp;
 		}
 	}
