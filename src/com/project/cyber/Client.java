@@ -38,6 +38,7 @@ public class Client {
 	private static final String HEX_FORMAT = "%02X";
 	private static final String MD5 = "MD5";
 	private static final String UTF8 = "UTF8";
+	private static final String RSA = "RSA";
 
 	private static String host;
 	private static Integer port;
@@ -80,11 +81,13 @@ public class Client {
 				dos.writeUTF(userId);
 
 				byte[] signature = getSignature(encryptedString, timestamp);
-				dos.writeUTF(Base64.getEncoder().encodeToString(signature));
+				if (signature != null) {
+					dos.writeUTF(Base64.getEncoder().encodeToString(signature));
 
-				System.out.println("\nYour message is securely sent to the server...");
-				System.out.println("It will be delivered to the recipient when they log in...\n");
-				System.out.println("Nothing more to do now, therefore logging out!!!\n\n");
+					System.out.println("\nYour message is securely sent to the server...");
+					System.out.println("It will be delivered to the recipient when they log in...\n");
+					System.out.println("Nothing more to do now, therefore logging out!!!\n\n");
+				}
 			}
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -95,7 +98,7 @@ public class Client {
 		try {
 			Integer messageLength = null;
 			if ((messageLength = ois.readInt()) != null) {
-				System.out.println("There are " + messageLength + " unread message(s) for you...");
+				System.out.println("There are " + messageLength + " unread message(s) for you...\n");
 				while (messageLength-- > 0) {
 					try {
 						String encryptedMessage = ois.readUTF();
@@ -103,16 +106,17 @@ public class Client {
 						String signature = ois.readUTF();
 
 						if (encryptedMessage != null && epochTimestamp != null && signature != null) {
-							boolean signed = verifySignature(Base64.getDecoder().decode(signature),
-									encryptedMessage, epochTimestamp, SERVER);
+							boolean signed = verifySignature(Base64.getDecoder().decode(signature), encryptedMessage,
+									epochTimestamp, SERVER);
 							if (signed) {
 								System.out.println("Date: " + new Date(epochTimestamp).toString());
-								System.out.println("Message: " + decryptionUtil(userId,
-										Base64.getDecoder().decode(encryptedMessage)));
+								System.out.println("Message: "
+										+ decryptionUtil(userId, Base64.getDecoder().decode(encryptedMessage)));
 								System.out.println();
 							} else {
 								System.err.println(
 										"Signature verification was not successful for the messages that were received...\n");
+								System.exit(0);
 							}
 						}
 					} catch (EOFException e) {
@@ -144,8 +148,10 @@ public class Client {
 			System.out.println("Please enter the message that you want to send to this recipient securely...");
 			String message = sc.nextLine();
 
-			encryptedString = Base64.getEncoder().encodeToString(
-					encryptionUtil(SERVER, getConcatenatedIdAndMessageWithLengthPrefix(recipientId, message)));
+			byte[] messageBytes = encryptionUtil(SERVER,
+					getConcatenatedIdAndMessageWithLengthPrefix(recipientId, message));
+			if (messageBytes != null)
+				encryptedString = Base64.getEncoder().encodeToString(messageBytes);
 
 		} else if ("no".startsWith(yesNo.toLowerCase())) {
 			System.out.println("Nothing more to do now, therefore exiting the program...\n\n");
@@ -190,10 +196,13 @@ public class Client {
 	private static byte[] getSignature(String encryptedString, Long timestamp) {
 		try {
 			Signature sig = Signature.getInstance("SHA256withRSA");
-			sig.initSign(getPrivateKey(userId));
-			sig.update(encryptedString.getBytes());
-			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(timestamp).array());
-			return sig.sign();
+			PrivateKey pk = getPrivateKey(userId);
+			if (pk != null) {
+				sig.initSign(pk);
+				sig.update(encryptedString.getBytes());
+				sig.update(ByteBuffer.allocate(Long.BYTES).putLong(timestamp).array());
+				return sig.sign();
+			}
 		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
 			e.printStackTrace();
 		}
@@ -203,10 +212,13 @@ public class Client {
 	private static boolean verifySignature(byte[] signature, String base64Message, Long epoch, String user) {
 		try {
 			Signature sig = Signature.getInstance("SHA256withRSA");
-			sig.initVerify(getPublicKey(user));
-			sig.update(base64Message.getBytes());
-			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(epoch).array());
-			return sig.verify(signature);
+			PublicKey pk = getPublicKey(user);
+			if (pk != null) {
+				sig.initVerify(getPublicKey(user));
+				sig.update(base64Message.getBytes());
+				sig.update(ByteBuffer.allocate(Long.BYTES).putLong(epoch).array());
+				return sig.verify(signature);
+			}
 		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
 			e.printStackTrace();
 		}
@@ -230,59 +242,75 @@ public class Client {
 	}
 
 	private static byte[] encryptionUtil(String userId, byte[] byteMessage) {
-		try {
-			PublicKey pubKey = getPublicKey(userId);
+		PublicKey pubKey = getPublicKey(userId);
+		if (pubKey != null) {
+			try {
+				Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+				cipher.init(Cipher.ENCRYPT_MODE, pubKey);
+				byte[] raw = cipher.doFinal(byteMessage);
 
-			Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-			cipher.init(Cipher.ENCRYPT_MODE, pubKey);
-			byte[] raw = cipher.doFinal(byteMessage);
-
-			return raw;
-		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
-				| BadPaddingException e) {
-			e.printStackTrace();
+				return raw;
+			} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
+					| BadPaddingException e) {
+				System.err.println("Exception occurred while encrypting the message is :: " + e.getMessage());
+			}
 		}
 		return null;
 	}
 
 	private static String decryptionUtil(String userId, byte[] message) {
-		try {
-			PrivateKey prvKey = getPrivateKey(userId);
+		PrivateKey prvKey = getPrivateKey(userId);
+		if (prvKey != null) {
+			try {
+				Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+				cipher.init(Cipher.DECRYPT_MODE, prvKey);
+				byte[] stringBytes = cipher.doFinal(message);
 
-			Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-			cipher.init(Cipher.DECRYPT_MODE, prvKey);
-			byte[] stringBytes = cipher.doFinal(message);
-
-			return new String(stringBytes, UTF8);
-		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
-				| BadPaddingException | IOException e) {
-			e.printStackTrace();
+				return new String(stringBytes, UTF8);
+			} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
+					| BadPaddingException | IOException e) {
+				System.err.println("Exception occurred while decrypting the message is :: " + e.getMessage());
+			}
 		}
 		return null;
 	}
 
 	private static PublicKey getPublicKey(String userId) {
+		File f = new File(userId.concat(PUBLIC_KEY));
+		byte[] keyBytes = null;
 		try {
-			File f = new File(userId.concat(PUBLIC_KEY));
-			byte[] keyBytes = Files.readAllBytes(f.toPath());
-			X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(keyBytes);
-			KeyFactory kf = KeyFactory.getInstance("RSA");
+			keyBytes = Files.readAllBytes(f.toPath());
+		} catch (IOException e) {
+			System.err.println("File " + f.toPath() + " was not found!!!");
+			return null;
+		}
+
+		X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(keyBytes);
+		try {
+			KeyFactory kf = KeyFactory.getInstance(RSA);
 			return kf.generatePublic(pubSpec);
-		} catch (NoSuchAlgorithmException | InvalidKeySpecException | IOException e) {
-			e.printStackTrace();
+		} catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+			System.err.println("Exception occurred while generating public key is :: " + e.getMessage());
 		}
 		return null;
 	}
 
 	private static PrivateKey getPrivateKey(String userId) {
+		File f = new File(userId.concat(PRIVATE_KEY));
+		byte[] keyBytes = null;
 		try {
-			File f = new File(userId.concat(PRIVATE_KEY));
-			byte[] keyBytes = Files.readAllBytes(f.toPath());
-			PKCS8EncodedKeySpec prvSpec = new PKCS8EncodedKeySpec(keyBytes);
-			KeyFactory kf = KeyFactory.getInstance("RSA");
+			keyBytes = Files.readAllBytes(f.toPath());
+		} catch (IOException e) {
+			System.err.println("File " + f.toPath() + " was not found!!!");
+			return null;
+		}
+
+		PKCS8EncodedKeySpec prvSpec = new PKCS8EncodedKeySpec(keyBytes);
+		try {
+			KeyFactory kf = KeyFactory.getInstance(RSA);
 			return kf.generatePrivate(prvSpec);
-		} catch (NoSuchAlgorithmException | InvalidKeySpecException | IOException e) {
-			e.printStackTrace();
+		} catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+			System.err.println("Exception occurred while generating private key is :: " + e.getMessage());
 		}
 		return null;
 	}

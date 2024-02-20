@@ -23,6 +23,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Date;
 import java.util.HashMap;
 
 import javax.crypto.BadPaddingException;
@@ -39,18 +40,17 @@ public class Server {
 	private static final String HEX_FORMAT = "%02X";
 	private static final String MD5 = "MD5";
 	private static final String UTF8 = "UTF8";
+	private static final String RSA = "RSA";
 
 	private static HashMap<String, ArrayList<MessageContent>> userMessages = new HashMap<>();
 	private static Integer port;
 
 	public static void main(String[] args) throws IOException {
 
-		System.out.println(System.getProperty("java.runtime.version"));
-
 		initializePortNumber(args);
 
 		try (ServerSocket ss = new ServerSocket(port)) {
-			System.out.println("Waiting for an incoming socket connection...");
+			System.out.println("Waiting for an incoming socket connection...\n");
 
 			while (true) {
 
@@ -88,27 +88,38 @@ public class Server {
 				boolean signed = verifySignature(Base64.getDecoder().decode(signature), base64Message, epoch, user);
 				if (signed) {
 					System.out.println(
-							"Signature verification was successful, decrypting the message from the client...");
+							"Signature verification was successful, decrypting the message from the client...\n");
 
 					byte[] decryptedCombinedBytes = decryptionUtil(SERVER, Base64.getDecoder().decode(base64Message));
-					int recLen = (decryptedCombinedBytes[0] << 8) | decryptedCombinedBytes[1];
-					String recipientId = new String(decryptedCombinedBytes, 2, recLen, UTF8);
-					String originalMessage = new String(decryptedCombinedBytes, 2 + recLen,
-							decryptedCombinedBytes.length - 2 - recLen, UTF8);
+					if (decryptedCombinedBytes != null) {
+						int recLen = (decryptedCombinedBytes[0] << 8) | decryptedCombinedBytes[1];
+						String recipientId = new String(decryptedCombinedBytes, 2, recLen, UTF8);
+						String originalMessage = new String(decryptedCombinedBytes, 2 + recLen,
+								decryptedCombinedBytes.length - 2 - recLen, UTF8);
+						
+						System.out.println("Sender user id: " + user);
+						System.out.println("Recipient user id: " + recipientId);
+						System.out.println("Date: " + new Date(epoch).toString());
+						System.out.println("Message: " + originalMessage);
 
-					String hashedId = convertUserIdToHashedMD5Id(recipientId);
-					MessageContent c = new MessageContent(
-							Base64.getEncoder().encodeToString(encryptionUtil(recipientId, originalMessage.getBytes())),
-							epoch);
+						String hashedId = convertUserIdToHashedMD5Id(recipientId);
+						byte[] encryptedMessage = encryptionUtil(recipientId, originalMessage.getBytes());
+						
+						if (encryptedMessage != null) {
+							MessageContent c = new MessageContent(Base64.getEncoder().encodeToString(encryptedMessage),
+									epoch);
 
-					ArrayList<MessageContent> content;
-					if (userMessages.containsKey(hashedId)) {
-						content = userMessages.get(hashedId);
-					} else {
-						content = new ArrayList<>();
+							ArrayList<MessageContent> content;
+							if (userMessages.containsKey(hashedId)) {
+								content = userMessages.get(hashedId);
+							} else {
+								content = new ArrayList<>();
+							}
+							content.add(c);
+							userMessages.put(hashedId, content);
+							System.out.println("Successfully received and saved the new message that was sent by the client...\n\n");
+						}
 					}
-					content.add(c);
-					userMessages.put(hashedId, content);
 				} else {
 					System.err.println(
 							"Signature verification was not successful, discarding the message from the client...");
@@ -148,10 +159,13 @@ public class Server {
 	private static byte[] getSignature(String encryptedString, Long timestamp) {
 		try {
 			Signature sig = Signature.getInstance("SHA256withRSA");
-			sig.initSign(getPrivateKey(SERVER));
-			sig.update(encryptedString.getBytes());
-			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(timestamp).array());
-			return sig.sign();
+			PrivateKey pk = getPrivateKey(SERVER);
+			if (pk != null) {
+				sig.initSign(pk);
+				sig.update(encryptedString.getBytes());
+				sig.update(ByteBuffer.allocate(Long.BYTES).putLong(timestamp).array());
+				return sig.sign();
+			}
 		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
 			e.printStackTrace();
 		}
@@ -161,10 +175,13 @@ public class Server {
 	private static boolean verifySignature(byte[] signature, String base64Message, Long epoch, String user) {
 		try {
 			Signature sig = Signature.getInstance("SHA256withRSA");
-			sig.initVerify(getPublicKey(user));
-			sig.update(base64Message.getBytes());
-			sig.update(ByteBuffer.allocate(Long.BYTES).putLong(epoch).array());
-			return sig.verify(signature);
+			PublicKey pk = getPublicKey(user);
+			if (pk != null) {
+				sig.initVerify(getPublicKey(user));
+				sig.update(base64Message.getBytes());
+				sig.update(ByteBuffer.allocate(Long.BYTES).putLong(epoch).array());
+				return sig.verify(signature);
+			}
 		} catch (InvalidKeyException | NoSuchAlgorithmException | SignatureException e) {
 			e.printStackTrace();
 		}
@@ -201,59 +218,75 @@ public class Server {
 	}
 
 	private static byte[] encryptionUtil(String userId, byte[] byteMessage) {
-		try {
-			PublicKey pubKey = getPublicKey(userId);
+		PublicKey pubKey = getPublicKey(userId);
+		if (pubKey != null) {
+			try {
+				Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+				cipher.init(Cipher.ENCRYPT_MODE, pubKey);
+				byte[] raw = cipher.doFinal(byteMessage);
 
-			Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-			cipher.init(Cipher.ENCRYPT_MODE, pubKey);
-			byte[] raw = cipher.doFinal(byteMessage);
-
-			return raw;
-		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
-				| BadPaddingException e) {
-			e.printStackTrace();
+				return raw;
+			} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
+					| BadPaddingException e) {
+				System.err.println("Exception occurred while encrypting the message is :: " + e.getMessage());
+			}
 		}
 		return null;
 	}
 
 	private static byte[] decryptionUtil(String userId, byte[] message) {
-		try {
-			PrivateKey prvKey = getPrivateKey(userId);
+		PrivateKey prvKey = getPrivateKey(userId);
+		if (prvKey != null) {
+			try {
+				Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+				cipher.init(Cipher.DECRYPT_MODE, prvKey);
+				byte[] stringBytes = cipher.doFinal(message);
 
-			Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-			cipher.init(Cipher.DECRYPT_MODE, prvKey);
-			byte[] stringBytes = cipher.doFinal(message);
-
-			return stringBytes;
-		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
-				| BadPaddingException e) {
-			e.printStackTrace();
+				return stringBytes;
+			} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
+					| BadPaddingException e) {
+				System.err.println("Exception occurred while decrypting the message is :: " + e.getMessage());
+			}
 		}
 		return null;
 	}
 
 	private static PublicKey getPublicKey(String userId) {
+		File f = new File(userId.concat(PUBLIC_KEY));
+		byte[] keyBytes = null;
 		try {
-			File f = new File(userId.concat(PUBLIC_KEY));
-			byte[] keyBytes = Files.readAllBytes(f.toPath());
-			X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(keyBytes);
-			KeyFactory kf = KeyFactory.getInstance("RSA");
+			keyBytes = Files.readAllBytes(f.toPath());
+		} catch (IOException e) {
+			System.err.println("File " + f.toPath() + " was not found!!!");
+			return null;
+		}
+
+		X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(keyBytes);
+		try {
+			KeyFactory kf = KeyFactory.getInstance(RSA);
 			return kf.generatePublic(pubSpec);
-		} catch (NoSuchAlgorithmException | InvalidKeySpecException | IOException e) {
-			e.printStackTrace();
+		} catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+			System.err.println("Exception occurred while generating public key is :: " + e.getMessage());
 		}
 		return null;
 	}
 
 	private static PrivateKey getPrivateKey(String userId) {
+		File f = new File(userId.concat(PRIVATE_KEY));
+		byte[] keyBytes = null;
 		try {
-			File f = new File(userId.concat(PRIVATE_KEY));
-			byte[] keyBytes = Files.readAllBytes(f.toPath());
-			PKCS8EncodedKeySpec prvSpec = new PKCS8EncodedKeySpec(keyBytes);
-			KeyFactory kf = KeyFactory.getInstance("RSA");
+			keyBytes = Files.readAllBytes(f.toPath());
+		} catch (IOException e) {
+			System.err.println("File " + f.toPath() + " was not found!!!");
+			return null;
+		}
+
+		PKCS8EncodedKeySpec prvSpec = new PKCS8EncodedKeySpec(keyBytes);
+		try {
+			KeyFactory kf = KeyFactory.getInstance(RSA);
 			return kf.generatePrivate(prvSpec);
-		} catch (NoSuchAlgorithmException | InvalidKeySpecException | IOException e) {
-			e.printStackTrace();
+		} catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+			System.err.println("Exception occurred while generating private key is :: " + e.getMessage());
 		}
 		return null;
 	}
