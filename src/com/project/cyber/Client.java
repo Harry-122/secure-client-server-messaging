@@ -29,8 +29,6 @@ import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 
-import com.project.cyber.Server.MessageContent;
-
 public class Client {
 
 	private static final String SERVER = "server";
@@ -100,16 +98,17 @@ public class Client {
 				System.out.println("There are " + messageLength + " unread message(s) for you...");
 				while (messageLength-- > 0) {
 					try {
-						MessageContent content = (MessageContent) ois.readObject();
+						String encryptedMessage = ois.readUTF();
+						Long epochTimestamp = ois.readLong();
 						String signature = ois.readUTF();
 
-						if (content != null && signature != null) {
+						if (encryptedMessage != null && epochTimestamp != null && signature != null) {
 							boolean signed = verifySignature(Base64.getDecoder().decode(signature),
-									content.getEncryptedMessage(), content.getUnencryptedTimestamp(), SERVER);
+									encryptedMessage, epochTimestamp, SERVER);
 							if (signed) {
-								System.out.println("Date: " + new Date(content.getUnencryptedTimestamp()).toString());
+								System.out.println("Date: " + new Date(epochTimestamp).toString());
 								System.out.println("Message: " + decryptionUtil(userId,
-										Base64.getDecoder().decode(content.getEncryptedMessage())));
+										Base64.getDecoder().decode(encryptedMessage)));
 								System.out.println();
 							} else {
 								System.err.println(
@@ -118,7 +117,7 @@ public class Client {
 						}
 					} catch (EOFException e) {
 						e.printStackTrace();
-					} catch (ClassNotFoundException | IOException e) {
+					} catch (IOException e) {
 						e.printStackTrace();
 					}
 				}

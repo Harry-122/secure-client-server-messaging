@@ -129,7 +129,8 @@ public class Server {
 						"There are " + messages.size() + " unread messages for this client, sending them all..");
 				oos.writeInt(messages.size());
 				for (MessageContent content : messages) {
-					oos.writeObject(content);
+					oos.writeUTF(content.getEncryptedMessage());
+					oos.writeLong(content.unencryptedTimestamp);
 					byte[] signature = getSignature(content.getEncryptedMessage(), content.unencryptedTimestamp);
 					oos.writeUTF(Base64.getEncoder().encodeToString(signature));
 				}
