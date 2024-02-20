@@ -81,7 +81,7 @@ public class Client {
 				dos.writeUTF(userId);
 
 				byte[] signature = getSignature(encryptedString, timestamp);
-				dos.write(signature);
+				dos.writeUTF(Base64.getEncoder().encodeToString(signature));
 
 				System.out.println("\nYour message is securely sent to the server...");
 				System.out.println("It will be delivered to the recipient when they log in...\n");
@@ -98,12 +98,13 @@ public class Client {
 			if ((messageLength = ois.readInt()) != null) {
 				System.out.println("There are " + messageLength + " unread message(s) for you...");
 				while (messageLength-- > 0) {
-					byte[] signature = null;
-					MessageContent content = null;
 					try {
-						if ((content = (MessageContent) ois.readObject()) != null && ois.read(signature) > 0) {
-							boolean signed = verifySignature(signature, content.getEncryptedMessage(),
-									content.getUnencryptedTimestamp(), SERVER);
+						MessageContent content = (MessageContent) ois.readObject();
+						String signature = ois.readUTF();
+
+						if (content != null && signature != null) {
+							boolean signed = verifySignature(Base64.getDecoder().decode(signature),
+									content.getEncryptedMessage(), content.getUnencryptedTimestamp(), SERVER);
 							if (signed) {
 								System.out.println("Date: " + new Date(content.getUnencryptedTimestamp()).toString());
 								System.out.println("Message: " + decryptionUtil(userId,

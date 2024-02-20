@@ -77,13 +77,12 @@ public class Server {
 	}
 
 	private static void receiveClientEncryptedMessage(DataInputStream dis) {
-		String base64Message = null;
-		String user = null;
-		Long epoch = null;
-		String signature = null;
 		try {
-			if ((base64Message = dis.readUTF()) != null && (epoch = dis.readLong()) != null
-					&& (user = dis.readUTF()) != null && (signature = dis.readUTF()) != null) {
+			String base64Message = dis.readUTF();
+			Long epoch = dis.readLong();
+			String user = dis.readUTF();
+			String signature = dis.readUTF();
+			if (base64Message != null && epoch != null && user != null && signature != null) {
 
 				boolean signed = verifySignature(Base64.getDecoder().decode(signature), base64Message, epoch, user);
 				if (signed) {
@@ -133,7 +132,8 @@ public class Server {
 				oos.writeInt(messages.size());
 				for (MessageContent content : messages) {
 					oos.writeObject(content);
-					oos.write(getSignature(content.getEncryptedMessage(), content.unencryptedTimestamp));
+					byte[] signature = getSignature(content.getEncryptedMessage(), content.unencryptedTimestamp);
+					oos.writeUTF(Base64.getEncoder().encodeToString(signature));
 				}
 				userMessages.remove(hexedId);
 			} else {
