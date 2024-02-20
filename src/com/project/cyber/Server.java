@@ -38,6 +38,7 @@ public class Server {
 	private static final String PREPEND_STRING = "gfhk2024:";
 	private static final String HEX_FORMAT = "%02X";
 	private static final String MD5 = "MD5";
+	private static final String UTF8 = "UTF8";
 
 	private static HashMap<String, ArrayList<MessageContent>> userMessages = new HashMap<>();
 	private static Integer port;
@@ -89,19 +90,16 @@ public class Server {
 					System.out.println(
 							"Signature verification was successful, decrypting the message from the client...");
 
-					String result = decryptionUtil(SERVER, Base64.getDecoder().decode(base64Message));
-					String recipient;
-					if (result.startsWith("a")) {
-						result = result.substring(5);
-						recipient = "alice";
-					} else {
-						result = result.substring(3);
-						recipient = "bob";
-					}
+					byte[] decryptedCombinedBytes = decryptionUtil(SERVER, Base64.getDecoder().decode(base64Message));
+					int recLen = (decryptedCombinedBytes[0] << 8) | decryptedCombinedBytes[1];
+					String recipientId = new String(decryptedCombinedBytes, 2, recLen, UTF8);
+					String originalMessage = new String(decryptedCombinedBytes, 2 + recLen,
+							decryptedCombinedBytes.length - 2 - recLen, UTF8);
 
-					String hashedId = convertUserIdToHashedMD5Id(recipient);
+					String hashedId = convertUserIdToHashedMD5Id(recipientId);
 					MessageContent c = new MessageContent(
-							Base64.getEncoder().encodeToString(encryptionUtil(recipient, result.getBytes())), epoch);
+							Base64.getEncoder().encodeToString(encryptionUtil(recipientId, originalMessage.getBytes())),
+							epoch);
 
 					ArrayList<MessageContent> content;
 					if (userMessages.containsKey(hashedId)) {
@@ -217,7 +215,7 @@ public class Server {
 		return null;
 	}
 
-	private static String decryptionUtil(String userId, byte[] message) {
+	private static byte[] decryptionUtil(String userId, byte[] message) {
 		try {
 			PrivateKey prvKey = getPrivateKey(userId);
 
@@ -225,9 +223,9 @@ public class Server {
 			cipher.init(Cipher.DECRYPT_MODE, prvKey);
 			byte[] stringBytes = cipher.doFinal(message);
 
-			return new String(stringBytes, "UTF8");
+			return stringBytes;
 		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
-				| BadPaddingException | IOException e) {
+				| BadPaddingException e) {
 			e.printStackTrace();
 		}
 		return null;

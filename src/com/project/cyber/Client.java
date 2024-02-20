@@ -39,6 +39,7 @@ public class Client {
 	private static final String PREPEND_STRING = "gfhk2024:";
 	private static final String HEX_FORMAT = "%02X";
 	private static final String MD5 = "MD5";
+	private static final String UTF8 = "UTF8";
 
 	private static String host;
 	private static Integer port;
@@ -144,8 +145,8 @@ public class Client {
 			System.out.println("Please enter the message that you want to send to this recipient securely...");
 			String message = sc.nextLine();
 
-			encryptedString = Base64.getEncoder()
-					.encodeToString(encryptionUtil(SERVER, recipientId.concat(message).getBytes()));
+			encryptedString = Base64.getEncoder().encodeToString(
+					encryptionUtil(SERVER, getConcatenatedIdAndMessageWithLengthPrefix(recipientId, message)));
 
 		} else if ("no".startsWith(yesNo.toLowerCase())) {
 			System.out.println("Nothing more to do now, therefore exiting the program...\n\n");
@@ -157,6 +158,34 @@ public class Client {
 
 		sc.close();
 		return encryptedString;
+	}
+
+	/**
+	 * We will have a prefix of two bytes denoting the length of the recipient id in
+	 * the concatenated message.
+	 * 
+	 * @param recipientId
+	 * @param message
+	 * @return
+	 */
+	private static byte[] getConcatenatedIdAndMessageWithLengthPrefix(String recipientId, String message) {
+
+		int recLen = recipientId.getBytes().length;
+		int mesLen = message.getBytes().length;
+		byte[] concatenatedMessage = new byte[2 + recLen + mesLen];
+
+		int i = 0;
+		concatenatedMessage[i++] = (byte) (recLen >> 8);
+		concatenatedMessage[i++] = (byte) recLen;
+
+		for (byte bt : recipientId.getBytes()) {
+			concatenatedMessage[i++] = bt;
+		}
+		for (byte bt : message.getBytes()) {
+			concatenatedMessage[i++] = bt;
+		}
+
+		return concatenatedMessage;
 	}
 
 	private static byte[] getSignature(String encryptedString, Long timestamp) {
@@ -225,7 +254,7 @@ public class Client {
 			cipher.init(Cipher.DECRYPT_MODE, prvKey);
 			byte[] stringBytes = cipher.doFinal(message);
 
-			return new String(stringBytes, "UTF8");
+			return new String(stringBytes, UTF8);
 		} catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException
 				| BadPaddingException | IOException e) {
 			e.printStackTrace();
